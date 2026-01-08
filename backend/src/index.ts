@@ -100,3 +100,41 @@ httpServer.listen(PORT, () => {
   console.log(`📡 Socket.IO server ready`);
 });
 
+// Graceful shutdown handling
+const gracefulShutdown = (signal: string) => {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  
+  // Stop accepting new connections
+  httpServer.close(() => {
+    console.log('HTTP server closed');
+    
+    // Close all Socket.IO connections
+    io.close(() => {
+      console.log('Socket.IO server closed');
+      console.log('✅ Graceful shutdown complete');
+      process.exit(0);
+    });
+  });
+  
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    console.error('⚠️ Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught errors
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  gracefulShutdown('unhandledRejection');
+});
+
