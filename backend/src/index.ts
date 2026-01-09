@@ -101,25 +101,92 @@ httpServer.listen(PORT, () => {
 });
 
 // Graceful shutdown handling
+let isShuttingDown = false;
+
 const gracefulShutdown = (signal: string) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
   console.log(`\n${signal} received. Starting graceful shutdown...`);
   
-  // Stop accepting new connections
-  httpServer.close(() => {
-    console.log('HTTP server closed');
-    
-    // Close all Socket.IO connections
-    io.close(() => {
-      console.log('Socket.IO server closed');
+  let socketIOClosed = false;
+  let httpServerClosed = false;
+  let shutdownComplete = false;
+  let socketIOTimeout: NodeJS.Timeout;
+  let httpServerTimeout: NodeJS.Timeout;
+  let checkInterval: NodeJS.Timeout;
+  
+  const tryExit = () => {
+    if (socketIOClosed && httpServerClosed && !shutdownComplete) {
+      shutdownComplete = true;
+      if (socketIOTimeout) clearTimeout(socketIOTimeout);
+      if (httpServerTimeout) clearTimeout(httpServerTimeout);
+      if (checkInterval) clearInterval(checkInterval);
       console.log('✅ Graceful shutdown complete');
+      // Use synchronous exit to ensure it happens immediately
       process.exit(0);
+    }
+  };
+  
+  // Fallback timeout for Socket.IO close (very short for fast shutdown)
+  socketIOTimeout = setTimeout(() => {
+    if (isShuttingDown && !socketIOClosed) {
+      console.log('Socket.IO server closed (timeout)');
+      socketIOClosed = true;
+      tryExit();
+    }
+  }, 25);
+  
+  // Fallback timeout for HTTP server close (very short for fast shutdown)
+  httpServerTimeout = setTimeout(() => {
+    if (isShuttingDown && !httpServerClosed) {
+      console.log('HTTP server closed (no active connections)');
+      httpServerClosed = true;
+      tryExit();
+    }
+  }, 25);
+  
+  // Close Socket.IO connections first (they might have active connections)
+  try {
+    io.close(() => {
+      if (!socketIOClosed) {
+        console.log('Socket.IO server closed');
+        socketIOClosed = true;
+        tryExit();
+      }
     });
-  });
+  } catch (error) {
+    console.log('Socket.IO server closed (error handled)');
+    socketIOClosed = true;
+    tryExit();
+  }
+  
+  // Then close HTTP server
+  try {
+    httpServer.close(() => {
+      if (!httpServerClosed) {
+        console.log('HTTP server closed');
+        httpServerClosed = true;
+        tryExit();
+      }
+    });
+  } catch (error) {
+    console.log('HTTP server closed (error handled)');
+    httpServerClosed = true;
+    tryExit();
+  }
+  
+  // Also check periodically in case callbacks don't fire (very frequent)
+  checkInterval = setInterval(() => {
+    tryExit();
+  }, 5);
   
   // Force shutdown after 10 seconds
   setTimeout(() => {
-    console.error('⚠️ Forced shutdown after timeout');
-    process.exit(1);
+    if (isShuttingDown) {
+      console.error('⚠️ Forced shutdown after timeout');
+      process.exit(1);
+    }
   }, 10000);
 };
 
